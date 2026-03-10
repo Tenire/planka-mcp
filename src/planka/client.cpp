@@ -65,9 +65,20 @@ coke::Task<wfrest::Json> PlankaClient::get(const std::string& path) {
         if (status < 200 || status >= 300) {
             LOG_ERROR() << "[PlankaClient] HTTP " << status << " for path: " << path << " Body: " << body;
             wfrest::Json err = wfrest::Json::Object();
-            err.push_back("error", body);
-            err.push_back("status", status);
             err.push_back("__is_error__", true);
+            err.push_back("status", status);
+            
+            wfrest::Json body_json = wfrest::Json::parse(body);
+            if (body_json.is_object()) {
+                if (body_json.has("code")) err.push_back("code", body_json["code"]);
+                if (body_json.has("message")) err.push_back("message", body_json["message"]);
+                if (body_json.has("problems")) err.push_back("problems", body_json["problems"]);
+            }
+            
+            if (!err.has("message")) {
+                err.push_back("error", body);
+                err.push_back("message", body);
+            }
             co_return err;
         }
         
@@ -94,8 +105,21 @@ coke::Task<wfrest::Json> PlankaClient::post(const std::string& path, const wfres
         if (status < 200 || status >= 300) {
             LOG_ERROR() << "[PlankaClient] POST " << path << " status: " << status << " Body: " << res_body;
             wfrest::Json err = wfrest::Json::Object();
-            err.push_back("error", res_body);
             err.push_back("__is_error__", true);
+            err.push_back("status", status);
+            
+            // Try to parse Planka error format
+            wfrest::Json body_json = wfrest::Json::parse(res_body);
+            if (body_json.is_object()) {
+                if (body_json.has("code")) err.push_back("code", body_json["code"]);
+                if (body_json.has("message")) err.push_back("message", body_json["message"]);
+                if (body_json.has("problems")) err.push_back("problems", body_json["problems"]);
+            }
+            
+            if (!err.has("message")) {
+                err.push_back("error", res_body);
+                err.push_back("message", res_body);
+            }
             co_return err;
         }
         co_return wfrest::Json::parse(res_body);
@@ -119,8 +143,20 @@ coke::Task<wfrest::Json> PlankaClient::patch(const std::string& path, const wfre
         if (status < 200 || status >= 300) {
             LOG_ERROR() << "[PlankaClient] PATCH " << path << " status: " << status << " Body: " << res_body;
             wfrest::Json err = wfrest::Json::Object();
-            err.push_back("error", res_body);
             err.push_back("__is_error__", true);
+            err.push_back("status", status);
+            
+            wfrest::Json body_json = wfrest::Json::parse(res_body);
+            if (body_json.is_object()) {
+                if (body_json.has("code")) err.push_back("code", body_json["code"]);
+                if (body_json.has("message")) err.push_back("message", body_json["message"]);
+                if (body_json.has("problems")) err.push_back("problems", body_json["problems"]);
+            }
+            
+            if (!err.has("message")) {
+                err.push_back("error", res_body);
+                err.push_back("message", res_body);
+            }
             co_return err;
         }
         co_return wfrest::Json::parse(res_body);
@@ -144,8 +180,20 @@ coke::Task<wfrest::Json> PlankaClient::del(const std::string& path) {
         if (status < 200 || status >= 300) {
             LOG_ERROR() << "[PlankaClient] DELETE " << path << " status: " << status << " Body: " << res_body;
             wfrest::Json err = wfrest::Json::Object();
-            err.push_back("error", res_body);
             err.push_back("__is_error__", true);
+            err.push_back("status", status);
+            
+            wfrest::Json body_json = wfrest::Json::parse(res_body);
+            if (body_json.is_object()) {
+                if (body_json.has("code")) err.push_back("code", body_json["code"]);
+                if (body_json.has("message")) err.push_back("message", body_json["message"]);
+                if (body_json.has("problems")) err.push_back("problems", body_json["problems"]);
+            }
+            
+            if (!err.has("message")) {
+                err.push_back("error", res_body);
+                err.push_back("message", res_body);
+            }
             co_return err;
         }
         co_return wfrest::Json::parse(res_body);

@@ -153,7 +153,7 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
                     templates.push_back(tj);
                 }
                 discovery.push_back("availableTemplates", templates);
-                discovery.push_back("_hint", "These are templates. Replace {id} with actual IDs when calling planka_explore.");
+                discovery.push_back("_hint", "Replace {id} with actual IDs. For creation, use planka_create with entity_type (e.g., project, board, list, card, board_membership). Projects require 'type' (private or shared).");
             } else {
                 wfrest::Json roots = wfrest::Json::Array();
                 for (const auto& r : resource_registry_.list_resources()) {
@@ -227,6 +227,9 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
              else if (etype == "board_notification_service") internal_args.push_back("boardId", parent_id);
              else if (etype == "user_notification_service") internal_args.push_back("userId", parent_id);
              else if (etype == "project_manager") internal_args.push_back("projectId", parent_id);
+             else if (etype == "board_membership") internal_args.push_back("boardId", parent_id);
+             else if (etype == "card_membership") internal_args.push_back("cardId", parent_id);
+             else if (etype == "card_label") internal_args.push_back("cardId", parent_id);
          }
 
         for (const auto& def : definitions_) {
@@ -241,8 +244,12 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
             co_return make_err("Error: Missing action in arguments");
         }
         std::string internal_name = arguments["action"].get<std::string>();
-        // Name normalization: setup_card_member -> add_card_member
-        if (internal_name == "setup_card_member") internal_name = "add_card_member";
+        // Name normalization for backward compatibility and internal consistency
+        if (internal_name == "setup_card_member" || internal_name == "add_card_member") {
+            internal_name = "create_card_membership";
+        } else if (internal_name == "add_card_label") {
+            internal_name = "create_card_label";
+        }
 
         wfrest::Json internal_args = arguments.has("data") && arguments["data"].is_object() ? arguments["data"] : wfrest::Json::Object();
         
@@ -348,12 +355,28 @@ coke::Task<wfrest::Json> ToolRegistry::execute_generic(const ToolDef& def, const
 
     if (api_res.has("__is_error__") && api_res["__is_error__"].get<bool>()) {
         std::string err_msg = "Error executing " + def.name + ": ";
-        if (api_res.has("error")) err_msg += api_res["error"].get<std::string>();
-        else err_msg += "Unknown Planka API error";
+        std::string planka_code = api_res.has("code") ? api_res["code"].get<std::string>() : "";
+        std::string planka_msg = api_res.has("message") ? api_res["message"].get<std::string>() : "";
+
+        if (planka_code == "E_NOT_FOUND" || (planka_code.empty() && planka_msg.find("not found") != std::string::npos)) {
+            err_msg += "Resource or User not found. ";
+            if (def.name == "create_board_membership") {
+                err_msg += "Hint: Ensure the user exists in the system via planka_explore(uri:'planka://users').";
+            } else if (def.name == "create_card_membership" || def.name == "create_card_label") {
+                err_msg += "Hint: For card assignment, the user or label MUST already be a member of the parent BOARD. Use planka_create(entity_type:'board_membership') first.";
+            } else if (def.name == "create_project_manager") {
+                err_msg += "Hint: Ensure the user exists in the system.";
+            } else {
+                err_msg += "Check IDs and ensure the parent resource exists.";
+            }
+        } else if (planka_code == "E_UNPROCESSABLE_ENTITY") {
+            err_msg += "Unprocessable entity (e.g., duplicate membership or missing requirements). " + planka_msg;
+        } else {
+            err_msg += (!planka_code.empty() ? "[" + planka_code + "] " : "") + (!planka_msg.empty() ? planka_msg : "Unknown Planka API error");
+        }
         
         item.push_back("text", err_msg);
         response_content.push_back(item);
-        // Also mark as error in MCP if possible, but the 'text' content is what AI reads
         co_return response_content;
     }
 
@@ -430,12 +453,12 @@ void ToolRegistry::init_definitions() {
         {"id", "Project ID", "string", true}
     }});
 
-    definitions_.push_back({"add_project_manager", "Add project manager", "POST", "/api/projects/{projectId}/project-managers", {
+    definitions_.push_back({"create_project_manager", "Add project manager", "POST", "/api/projects/{projectId}/project-managers", {
         {"projectId", "Project ID", "string", true},
         {"userId", "User ID", "string", true}
     }});
 
-    definitions_.push_back({"remove_project_manager", "Remove project manager", "DELETE", "/api/project-managers/{id}", {
+    definitions_.push_back({"delete_project_manager", "Remove project manager", "DELETE", "/api/project-managers/{id}", {
         {"id", "Manager ID", "string", true}
     }});
 
@@ -456,7 +479,7 @@ void ToolRegistry::init_definitions() {
         {"id", "Board ID", "string", true}
     }});
 
-    definitions_.push_back({"create_board_membership", "Add member to board", "POST", "/api/boards/{boardId}/memberships", {
+    definitions_.push_back({"create_board_membership", "Add member to board", "POST", "/api/boards/{boardId}/board-memberships", {
         {"boardId", "Board ID", "string", true},
         {"userId", "User ID", "string", true},
         {"role", "Role", "dropdown", false, {"editor", "viewer"}}
@@ -551,12 +574,12 @@ void ToolRegistry::init_definitions() {
     }});
 
     // Membership & Labels & Tasks & Comments
-    definitions_.push_back({"add_card_member", "Add user as card member", "POST", "/api/cards/{cardId}/card-memberships", {
+    definitions_.push_back({"create_card_membership", "Add user as card member", "POST", "/api/cards/{cardId}/card-memberships", {
         {"cardId", "Card ID", "string", true},
         {"userId", "User ID", "string", true}
     }});
 
-    definitions_.push_back({"remove_card_member", "Remove card member", "DELETE", "/api/cards/{cardId}/card-memberships/userId:{userId}", {
+    definitions_.push_back({"delete_card_membership", "Remove card member", "DELETE", "/api/cards/{cardId}/card-memberships/userId:{userId}", {
         {"cardId", "Card ID", "string", true},
         {"userId", "User ID", "string", true}
     }});
@@ -578,11 +601,11 @@ void ToolRegistry::init_definitions() {
         {"id", "Label ID", "string", true}
     }});
 
-    definitions_.push_back({"add_card_label", "Add label to card", "POST", "/api/cards/{cardId}/card-labels", {
+    definitions_.push_back({"create_card_label", "Add label to card", "POST", "/api/cards/{cardId}/card-labels", {
         {"cardId", "Card ID", "string", true},
         {"labelId", "Label ID", "string", true}
     }});
-    definitions_.push_back({"remove_card_label", "Remove label from card", "DELETE", "/api/cards/{cardId}/card-labels/labelId:{labelId}", {
+    definitions_.push_back({"delete_card_label", "Remove label from card", "DELETE", "/api/cards/{cardId}/card-labels/labelId:{labelId}", {
         {"cardId", "Card ID", "string", true},
         {"labelId", "Label ID", "string", true}
     }});
