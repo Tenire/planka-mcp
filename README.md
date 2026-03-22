@@ -116,7 +116,7 @@ Ideal for **Docker** or cloud deployment. The server acts as a stateless bridge.
 {
   "mcpServers": {
     "planka": {
-      "url": "http://your-gateway-ip:7526/",//or http://xxx:7526/mcp
+      "url": "http://your-gateway-ip:7526/",
       "headers": {
         "X-Planka-Url": "https://your-planka-instance.top:8080",
         "X-Planka-Api-Key": "HwQsvOKO_YOUR_SECRET_KEY"
@@ -125,6 +125,10 @@ Ideal for **Docker** or cloud deployment. The server acts as a stateless bridge.
   }
 }
 ```
+
+> or  
+> "url": "http://your-gateway-ip:7526/mcp"
+> "url": "http://your-gateway-ip:7526/sse"
 
 ---
 

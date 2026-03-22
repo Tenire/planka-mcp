@@ -5,6 +5,19 @@
 
 namespace mcp {
 
+static std::string safe_get_string(const wfrest::Json& j, const std::string& key, const std::string& def = "") {
+    if (j.has(key)) {
+        if (j[key].is_string()) return j[key].get<std::string>();
+        return j[key].dump();
+    }
+    return def;
+}
+
+static std::string safe_get_string(const wfrest::Json& j) {
+    if (j.is_string()) return j.get<std::string>();
+    return j.dump();
+}
+
 ToolRegistry::ToolRegistry(ResourceRegistry& resource_registry) 
     : resource_registry_(resource_registry) {
     init_definitions();
@@ -21,7 +34,7 @@ std::vector<Tool> ToolRegistry::list_tools() {
     
     wfrest::Json et = wfrest::Json::Object();
     et.push_back("type", "string");
-    et.push_back("description", "Type of entity to create (e.g., project, board, list, card, task_list, task, comment, user, webhook, label, etc.)");
+    et.push_back("description", "Fill type into 'entity_type' (e.g. project, board, list, card, task_list, task, comment, user, label, webhook).");
     c_props.push_back("entity_type", et);
     req.push_back("entity_type");
 
@@ -32,13 +45,13 @@ std::vector<Tool> ToolRegistry::list_tools() {
 
     wfrest::Json d = wfrest::Json::Object();
     d.push_back("type", "object");
-    d.push_back("description", "Fields for creation (e.g., name, description).");
+    d.push_back("description", "Fill {} into 'data' for help.");
     c_props.push_back("data", d);
     req.push_back("data");
 
     create_schema.push_back("properties", c_props);
     create_schema.push_back("required", req);
-    tools.push_back({"planka_create", "Create a new Planka entity.", create_schema});
+    tools.push_back({"planka_create", "Create entities.", create_schema});
 
     // 2. planka_update
     wfrest::Json update_schema = wfrest::Json::Object();
@@ -51,7 +64,7 @@ std::vector<Tool> ToolRegistry::list_tools() {
 
     wfrest::Json uid = wfrest::Json::Object();
     uid.push_back("type", "string");
-    uid.push_back("description", "ID of the entity to update or delete.");
+    uid.push_back("description", "Fill the entity ID into 'id'.");
     u_props.push_back("id", uid);
     u_req.push_back("id");
 
@@ -60,7 +73,7 @@ std::vector<Tool> ToolRegistry::list_tools() {
 
     update_schema.push_back("properties", u_props);
     update_schema.push_back("required", u_req);
-    tools.push_back({"planka_update", "Update an existing Planka entity.", update_schema});
+    tools.push_back({"planka_update", "Update entities.", update_schema});
 
     // 3. planka_delete
     wfrest::Json delete_schema = wfrest::Json::Object();
@@ -92,12 +105,13 @@ std::vector<Tool> ToolRegistry::list_tools() {
 
     wfrest::Json a_data = wfrest::Json::Object();
     a_data.push_back("type", "object");
-    a_data.push_back("description", "Arguments required for the action.");
+    a_data.push_back("description", "Fill {} into 'data' for help.");
     a_props.push_back("data", a_data);
 
     action_schema.push_back("properties", a_props);
     action_schema.push_back("required", a_req);
-    tools.push_back({"planka_action", "Perform specialized actions/relationships (move, sort, membership, custom fields).", action_schema});
+    a_req.push_back("data");
+    tools.push_back({"planka_action", "Quick actions (move, duplicate, labels, members).", action_schema});
 
     // 5. planka_explore
     wfrest::Json explore_schema = wfrest::Json::Object();
@@ -106,7 +120,7 @@ std::vector<Tool> ToolRegistry::list_tools() {
     
     wfrest::Json uri_field = wfrest::Json::Object();
     uri_field.push_back("type", "string");
-    uri_field.push_back("description", "Resource URI to explore (e.g., planka://projects).");
+    uri_field.push_back("description", "Fill planka://path into 'uri' (e.g. planka://projects).");
     e_props.push_back("uri", uri_field);
 
     wfrest::Json templates_field = wfrest::Json::Object();
@@ -115,7 +129,7 @@ std::vector<Tool> ToolRegistry::list_tools() {
     e_props.push_back("templates", templates_field);
 
     explore_schema.push_back("properties", e_props);
-    tools.push_back({"planka_explore", "Explore resources or list discovery paths. Call with templates:true to see URI templates.", explore_schema});
+    tools.push_back({"planka_explore", "Explore resources.", explore_schema});
 
     return tools;
 }
@@ -132,6 +146,42 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
 
     std::string usage_warning = "";
     wfrest::Json processed_args = wfrest::Json::Object();
+
+    auto get_field_help = [](const std::string& tool_name, const ToolDef& def) {
+        std::string usage = "Help for '" + tool_name + "':\nRequired fields in 'data': ";
+        std::string optional = "\nOptional fields in 'data': ";
+        bool has_req = false;
+        bool has_opt = false;
+        
+        for (const auto& field : def.fields) {
+            // Skip fields already parsed from URL (those with placeholders in path)
+            if (def.path.find("{" + field.name + "}") != std::string::npos) continue;
+            
+            std::string field_info = field.name + " (" + field.description + ")";
+            if (!field.options.empty()) {
+                field_info += " [Options: ";
+                for (const auto& opt : field.options) field_info += opt + ", ";
+                field_info.pop_back(); field_info.pop_back();
+                field_info += "]";
+            }
+            
+            if (field.required) {
+                usage += field_info + ", ";
+                has_req = true;
+            } else {
+                optional += field_info + ", ";
+                has_opt = true;
+            }
+        }
+        if (has_req) usage.erase(usage.length() - 2);
+        else usage += "None";
+        
+        if (has_opt) {
+            optional.erase(optional.length() - 2);
+            usage += optional;
+        }
+        return usage;
+    };
 
     // Universal Argument Processor (Scenario C: Field level nested JSON strings)
     if (arguments.is_object()) {
@@ -249,10 +299,32 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
         else if (name == "planka_update") internal_name = "update_" + etype;
         else if (name == "planka_delete") internal_name = "delete_" + etype;
         
-        wfrest::Json internal_args = processed_args.has("data") && processed_args["data"].is_object() ? processed_args["data"] : wfrest::Json::Object();
+        bool data_is_empty = !processed_args.has("data") || !processed_args["data"].is_object() || processed_args["data"].size() == 0;
+        wfrest::Json internal_args = (!data_is_empty) ? processed_args["data"] : wfrest::Json::Object();
         
         if (processed_args.has("id")) {
-            internal_args.push_back("id", processed_args["id"]);
+            std::string id_val = safe_get_string(processed_args, "id");
+            internal_args.push_back("id", id_val);
+            // Sync with specific ID field based on entity_type
+            if (etype == "project") internal_args.push_back("projectId", id_val);
+            else if (etype == "board") internal_args.push_back("boardId", id_val);
+            else if (etype == "list") internal_args.push_back("listId", id_val);
+            else if (etype == "card") internal_args.push_back("cardId", id_val);
+            else if (etype == "task_list") internal_args.push_back("taskListId", id_val);
+            else if (etype == "task") internal_args.push_back("taskId", id_val);
+            else if (etype == "comment") internal_args.push_back("commentId", id_val);
+            else if (etype == "user") internal_args.push_back("userId", id_val);
+            else if (etype == "label") internal_args.push_back("labelId", id_val);
+            else if (etype == "notification") internal_args.push_back("notificationId", id_val);
+            else if (etype == "webhook") internal_args.push_back("webhookId", id_val);
+            else if (etype == "board_notification_service" || etype == "user_notification_service" || etype == "notification_service") 
+                internal_args.push_back("notificationServiceId", id_val);
+            else if (etype == "custom_field_group" || etype == "board_custom_field_group" || etype == "card_custom_field_group")
+                internal_args.push_back("customFieldGroupId", id_val);
+            else if (etype == "custom_field") internal_args.push_back("customFieldId", id_val);
+            else if (etype == "attachment") internal_args.push_back("attachmentId", id_val);
+            else if (etype == "project_manager") internal_args.push_back("projectManagerId", id_val);
+            else if (etype == "board_membership") internal_args.push_back("boardMembershipId", id_val);
         }
         if (processed_args.has("parent_id") && processed_args["parent_id"].is_string()) {
              std::string parent_id = processed_args["parent_id"].get<std::string>();
@@ -277,6 +349,16 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
 
         for (const auto& def : definitions_) {
             if (def.name == internal_name) {
+                // SMART HINT: If data is empty or not provided, return help
+                if (data_is_empty) {
+                    wfrest::Json res = wfrest::Json::Array();
+                    wfrest::Json item = wfrest::Json::Object();
+                    item.push_back("type", "text");
+                    item.push_back("text", get_field_help(name + "(entity_type:'" + etype + "')", def));
+                    res.push_back(item);
+                    co_return res;
+                }
+                
                 wfrest::Json res = co_await execute_generic(def, internal_args, client);
                 inject_warning(res);
                 co_return res;
@@ -286,25 +368,46 @@ coke::Task<wfrest::Json> ToolRegistry::call_tool(const std::string& name, const 
     } 
     else if (name == "planka_action") {
         if (!processed_args.has("action") || !processed_args["action"].is_string()) {
-            co_return make_err("Error: Missing action in arguments");
+            co_return make_err("Error: Missing 'action'. Available actions: move_card, duplicate_card, create_card_membership, delete_card_membership, create_card_label, delete_card_label, set_card_custom_field, move_cards_in_list, sort_list, clear_list.");
         }
         std::string internal_name = processed_args["action"].get<std::string>();
+        // Alias mapping
         if (internal_name == "setup_card_member" || internal_name == "add_card_member") {
             internal_name = "create_card_membership";
         } else if (internal_name == "add_card_label") {
             internal_name = "create_card_label";
         }
 
-        wfrest::Json internal_args = processed_args.has("data") && processed_args["data"].is_object() ? processed_args["data"] : wfrest::Json::Object();
+        bool action_data_is_empty = !processed_args.has("data") || !processed_args["data"].is_object() || processed_args["data"].size() == 0;
+        wfrest::Json internal_args = (!action_data_is_empty) ? processed_args["data"] : wfrest::Json::Object();
         
+        // Find matching definition
+        const ToolDef* target_def = nullptr;
         for (const auto& def : definitions_) {
             if (def.name == internal_name) {
-                wfrest::Json res = co_await execute_generic(def, internal_args, client);
-                inject_warning(res);
-                co_return res;
+                target_def = &def;
+                break;
             }
         }
-        co_return make_err("Error: Unknown action: " + internal_name);
+
+        if (!target_def) {
+            co_return make_err("Error: Unknown action: " + internal_name);
+        }
+
+        // SMART HINT: If data is empty or not provided, return help
+        if (action_data_is_empty) {
+            wfrest::Json res = wfrest::Json::Array();
+            wfrest::Json item = wfrest::Json::Object();
+            item.push_back("type", "text");
+            item.push_back("text", get_field_help("planka_action(action:'" + internal_name + "')", *target_def));
+            res.push_back(item);
+            inject_warning(res);
+            co_return res;
+        }
+
+        wfrest::Json res = co_await execute_generic(*target_def, internal_args, client);
+        inject_warning(res);
+        co_return res;
     }
 
     co_return make_err("Error: Tool not found: " + name);
@@ -466,7 +569,7 @@ void ToolRegistry::init_definitions() {
     }});
 
     definitions_.push_back({"update_project", "Update a project", "PATCH", "/api/projects/{id}", {
-        {"id", "Project ID", "string", true},
+        {"id", "Project ID (get 'id' from project resource)", "string", true},
         {"name", "New name", "string", false},
         {"description", "New description", "string", false},
         {"isHidden", "Hide project", "checkbox", false}
@@ -482,17 +585,17 @@ void ToolRegistry::init_definitions() {
     }});
 
     definitions_.push_back({"delete_project_manager", "Remove project manager", "DELETE", "/api/project-managers/{id}", {
-        {"id", "Manager ID", "string", true}
+        {"id", "Manager ID (the manager record ID)", "string", true}
     }});
 
     definitions_.push_back({"create_board", "Create a board", "POST", "/api/projects/{projectId}/boards", {
-        {"projectId", "Project ID", "string", true},
+        {"projectId", "Project ID (the parent project)", "string", true},
         {"name", "Board name", "string", true},
         {"position", "Position", "number", false}
     }});
 
     definitions_.push_back({"update_board", "Update a board", "PATCH", "/api/boards/{id}", {
-        {"id", "Board ID", "string", true},
+        {"id", "Board ID (get 'id' from board resource)", "string", true},
         {"name", "New name", "string", false},
         {"position", "New position", "number", false},
         {"isSubscribed", "Subscribe to board", "checkbox", false}
@@ -526,7 +629,7 @@ void ToolRegistry::init_definitions() {
     }});
 
     definitions_.push_back({"update_list", "Update a list", "PATCH", "/api/lists/{id}", {
-        {"id", "List ID", "string", true},
+        {"id", "List ID (get 'id' from list inside board summary)", "string", true},
         {"name", "New name", "string", false},
         {"position", "New position", "number", false},
         {"type", "Status (active, closed, archive)", "dropdown", false, {"active", "closed", "archive"}}
@@ -558,15 +661,15 @@ void ToolRegistry::init_definitions() {
     }});
 
     definitions_.push_back({"update_card", "Update a card", "PATCH", "/api/cards/{id}", {
-        {"id", "Card ID", "string", true},
+        {"id", "Card ID (get 'id' from card resource)", "string", true},
         {"name", "New name", "string", false},
         {"description", "New description (supports Markdown)", "string", false},
         {"position", "New position", "number", false},
         {"type", "New type (project, story)", "dropdown", false, {"project", "story"}},
         {"coverAttachmentId", "Set cover image (ID)", "string", false},
-        {"dueDate", "Due date (ISO string, e.g., 2026-12-31T23:59:59Z)", "string", false},
+        {"dueDate", "Due date (ISO string)", "string", false},
         {"isDueCompleted", "Due completed", "checkbox", false},
-        {"stopwatch", "Timer state object: {startedAt: ISO/null, total: number}", "object", false},
+        {"stopwatch", "Timer state object", "object", false},
         {"isSubscribed", "Subscribe to card", "checkbox", false}
     }});
 
@@ -574,10 +677,10 @@ void ToolRegistry::init_definitions() {
         {"id", "Card ID", "string", true}
     }});
 
-    definitions_.push_back({"move_card", "Move a card to a different list or board. To ARCHIVE a card, move it to the list with type='archive' (find it via archiveListId in board summary).", "PATCH", "/api/cards/{id}", {
-        {"id", "Card ID", "string", true},
-        {"boardId", "New board ID", "string", false},
-        {"listId", "New list ID. Use archiveListId from board summary to archive the card.", "string", true},
+    definitions_.push_back({"move_card", "Move a card. Destination use 'listId'.", "PATCH", "/api/cards/{id}", {
+        {"id", "Card ID (the thing you want to move)", "string", true},
+        {"boardId", "New board ID (optional)", "string", false},
+        {"listId", "New list ID (destination)", "string", true},
         {"position", "New position", "number", false}
     }});
 
@@ -597,13 +700,13 @@ void ToolRegistry::init_definitions() {
     }});
 
     // Membership & Labels & Tasks & Comments
-    definitions_.push_back({"create_card_membership", "Add user as card member", "POST", "/api/cards/{cardId}/card-memberships", {
-        {"cardId", "Card ID", "string", true},
+    definitions_.push_back({"create_card_membership", "Add user as card member", "POST", "/api/cards/{id}/card-memberships", {
+        {"id", "Card ID", "string", true},
         {"userId", "User ID", "string", true}
     }});
 
-    definitions_.push_back({"delete_card_membership", "Remove card member", "DELETE", "/api/cards/{cardId}/card-memberships/userId:{userId}", {
-        {"cardId", "Card ID", "string", true},
+    definitions_.push_back({"delete_card_membership", "Remove card member", "DELETE", "/api/cards/{id}/card-memberships/userId:{userId}", {
+        {"id", "Card ID", "string", true},
         {"userId", "User ID", "string", true}
     }});
 
@@ -615,7 +718,7 @@ void ToolRegistry::init_definitions() {
     }});
 
     definitions_.push_back({"update_label", "Update label details", "PATCH", "/api/labels/{id}", {
-        {"id", "Label ID", "string", true},
+        {"id", "Label ID (from board resource)", "string", true},
         {"name", "New name", "string", false},
         {"color", "New color", "dropdown", false, {"berry-red", "orange-peel", "egg-yellow", "fresh-salad", "midnight-blue", "lilac-eyes", "apricot-red"}}
     }});
@@ -624,17 +727,17 @@ void ToolRegistry::init_definitions() {
         {"id", "Label ID", "string", true}
     }});
 
-    definitions_.push_back({"create_card_label", "Add label to card", "POST", "/api/cards/{cardId}/card-labels", {
-        {"cardId", "Card ID", "string", true},
+    definitions_.push_back({"create_card_label", "Add label to card", "POST", "/api/cards/{id}/card-labels", {
+        {"id", "Card ID", "string", true},
         {"labelId", "Label ID", "string", true}
     }});
-    definitions_.push_back({"delete_card_label", "Remove label from card", "DELETE", "/api/cards/{cardId}/card-labels/labelId:{labelId}", {
-        {"cardId", "Card ID", "string", true},
+    definitions_.push_back({"delete_card_label", "Remove label from card", "DELETE", "/api/cards/{id}/card-labels/labelId:{labelId}", {
+        {"id", "Card ID", "string", true},
         {"labelId", "Label ID", "string", true}
     }});
 
-    definitions_.push_back({"create_task_list", "Create task list", "POST", "/api/cards/{cardId}/task-lists", {
-        {"cardId", "Card ID", "string", true},
+    definitions_.push_back({"create_task_list", "Create task list", "POST", "/api/cards/{id}/task-lists", {
+        {"id", "Card ID", "string", true},
         {"name", "Name", "string", true},
         {"position", "Position", "number", false}
     }});
@@ -668,8 +771,8 @@ void ToolRegistry::init_definitions() {
         {"id", "Task ID", "string", true}
     }});
 
-    definitions_.push_back({"create_comment", "Add comment to card", "POST", "/api/cards/{cardId}/comments", {
-        {"cardId", "Card ID", "string", true},
+    definitions_.push_back({"create_comment", "Add comment to card", "POST", "/api/cards/{id}/comments", {
+        {"id", "Card ID", "string", true},
         {"text", "Comment text", "string", true}
     }});
 

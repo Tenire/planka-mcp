@@ -2,7 +2,7 @@ add_rules("mode.debug", "mode.release")
 add_rules("plugin.compile_commands.autoupdate", {outputdir = "build"})
 
 set_project("planka-mcp")
-set_version("26.03.12")
+set_version("26.03.22")
 set_languages("cxx20")
 
 -- 引入 wfrest (基于静态链接，将自动附带引入 workflow)
